@@ -1,0 +1,568 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2039,SC2059
+
+# Title:         create-conventional-changelog
+# Description:   A script for automatically generating a changelog from
+#                git history which uses conventional commit messages.
+#                https://www.conventionalcommits.org/en/v1.0.0
+# Author:        agnostic-apollo
+# Usage:         run "create-conventional-changelog"
+# Date:          06-Jan-2022
+# Bash Version:  4.3 or higher
+# Credits:       -
+version=0.1.0
+
+
+
+### Set Default Variables Start
+# The following variables must not be modified unless you know what you are doing
+
+CCC_VERBOSE_LEVEL=0 # Default to 0
+CCC_ARGS_VERBOSE_LEVEL=0 # Set this to 1 manually, if you want to debug arguments received
+
+CCC_NOOP_COMMAND=0 # Default to 0
+
+GIT_DIR_PATH="" # Default to none
+CHANGELOG_FILE_PATH="" # Default to none
+START_COMMIT_HASH="" # Default to none
+END_COMMIT_HASH="" # Default to none
+REPO_URL="" # Default to none
+RELEASE_TAG="" # Default to none
+
+### Set Default Variables End
+
+function ccc_log() { local log_level="${1}"; shift; if [[ $CCC_VERBOSE_LEVEL -ge $log_level ]]; then echo "$@"; fi }
+function ccc_log_literal() { local log_level="${1}"; shift; if [[ $CCC_VERBOSE_LEVEL -ge $log_level ]]; then echo -e "$@"; fi }
+function ccc_log_errors() { echo "$@" 1>&2; }
+function ccc_log_args() { if [[ $CCC_ARGS_VERBOSE_LEVEL -ge "1" ]]; then echo "$@"; fi }
+function ccc_log_arg_errors() { echo "$@" 1>&2; }
+
+##
+# ccc_main `[argument...]`
+##
+ccc_main() {
+
+    local return_value
+
+    # Process the command arguments passed to create-conventional-changelog
+    ccc_process_arguments "$@" || return $?
+
+    [ "$CCC_NOOP_COMMAND" = "1" ] && return 0
+
+    ccc_run
+
+}
+
+##
+# ccc_run
+##
+ccc_run() {
+
+    local return_value
+
+    local commit_hashes_list
+    local commit_hash
+    local commit_hash_short
+    local commit_message
+    local commit_subject
+    local commit_pull_request_owner
+    local commit_pull_request_info
+    local commit_pull_request_number
+    local commit_type
+    local commit_type_and_scope
+    local commit_type_title
+    local commit_url_achor
+    local commit_url_achor
+    local is_breaking_change
+    local changelog_text
+    local release_timestamp
+    local repo_owner
+
+    ccc_log 1 "GIT_DIR_PATH=\"$GIT_DIR_PATH\""
+    ccc_log 1 "CHANGELOG_FILE_PATH=\"$CHANGELOG_FILE_PATH\""
+    ccc_log 1 "START_COMMIT_HASH=\"$START_COMMIT_HASH\""
+    ccc_log 1 "END_COMMIT_HASH=\"$END_COMMIT_HASH\""
+    ccc_log 1 "REPO_URL=\"$REPO_URL\""
+    ccc_log 1 "RELEASE_TAG=\"$RELEASE_TAG\""
+
+    # If GIT_DIR_PATH is not set
+    if [ -z "$GIT_DIR_PATH" ]; then
+        ccc_log_arg_errors "git_dir_path passed is not set"
+        return 1
+    fi
+
+    # If directory not found at GIT_DIR_PATH
+    if [ ! -d "$GIT_DIR_PATH" ]; then
+        ccc_log_arg_errors "git_dir_path \"$GIT_DIR_PATH\" not found"
+        return 1
+    fi
+
+    # If ".git" directory not found under GIT_DIR_PATH
+    if [ ! -d "$GIT_DIR_PATH/.git" ]; then
+        ccc_log_arg_errors "git_dir_path \"$GIT_DIR_PATH\" does not contain the \".git\" directory"
+        return 1
+    fi
+
+    # If CHANGELOG_FILE_PATH is not set
+    if [ -z "$CHANGELOG_FILE_PATH" ]; then
+        ccc_log_arg_errors "changelog_file_path passed is not set"
+        return 1
+    fi
+
+    # If START_COMMIT_HASH is not set
+    if [ -z "$START_COMMIT_HASH" ]; then
+        ccc_log_arg_errors "start_commit_hash passed is not set"
+        return 1
+    fi
+
+    # If END_COMMIT_HASH is not set
+    if [ -z "$END_COMMIT_HASH" ]; then
+        ccc_log_arg_errors "end_commit_hash passed is not set"
+        return 1
+    fi
+
+    # If REPO_URL is not set
+    if [ -z "$REPO_URL" ]; then
+        ccc_log_arg_errors "repo_url passed is not set"
+        return 1
+    fi
+
+    local valid_repo_url_regex='^https:\/\/([^/]+)\/([^/]+)\/([^/]+)$'
+    if ccc_contains_newline "$REPO_URL" ||  [[ ! "$REPO_URL" =~ $valid_repo_url_regex ]]; then
+        ccc_log_arg_errors "repo_url  \"$REPO_URL\" passed is not a valid https url in the format https://host/<user>/<repo>. Example: https://github.com/termux/termux-app"
+        return 1
+    fi
+
+    repo_owner="$(printf "%s" "$REPO_URL" | sed -r -z -e "s/$valid_repo_url_regex/\2/")"
+
+    # If RELEASE_TAG is not set
+    if [ -z "$RELEASE_TAG" ]; then
+        ccc_log_arg_errors "release_tag passed is not set"
+        return 1
+    fi
+
+    if ! git check-ref-format "tags/$RELEASE_TAG" 1>/dev/null; then
+        ccc_log_arg_errors "release_tag \"$RELEASE_TAG\" passed is not a valid git tag. Check http://git-scm.com/docs/git-check-ref-format for details."
+        return 1
+    fi
+
+    # Get commit_hashes_list between start and end commit
+    commit_hashes_list="$(git -C "$GIT_DIR_PATH" rev-list --ancestry-path "$START_COMMIT_HASH".."$END_COMMIT_HASH" 2>&1)"
+    return_value=$?
+    if [ $return_value -ne 0 ] || [ -z "$commit_hashes_list" ]; then
+        ccc_log_errors "Failed to get commit hashes list between start and end commit"
+        ccc_log_errors "$commit_hashes_list"
+        if [ $return_value -eq 0 ]; then
+            return_value=1
+        fi
+        return $return_value
+    fi
+
+    ccc_log 2 "commit_hashes_list="
+    ccc_log 2 "\`\`\`"
+    ccc_log 2 "$commit_hashes_list"
+    ccc_log 2 "\`\`\`"
+
+    declare -A commit_types_list
+
+    # As per conventional commits 1.0.0 specs, the commit message should
+    # be structured as follows:
+    # ```
+    # <type>[optional scope]: <description>
+    # 
+    # [optional body]
+    # 
+    # [optional footer(s)]
+    # ```
+    # https://www.conventionalcommits.org/en/v1.0.0
+
+    # Commit type can contain "a-zA-Z0-9_-" but must not start or end with "_-"
+    # and must contain at least two characters
+    local commit_types_regex='([a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]([|/][a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9])*)' # "\1"
+    local commit_scope_regex='(\([^)]*\))?' # "\3"
+    local commit_breaking_change_regex='(!)?' # "\4"
+    local commit_subject_regex='(.*)' # "\5"
+    local valid_commit_type_and_scope_regex="^$commit_types_regex$commit_scope_regex$commit_breaking_change_regex: $commit_subject_regex\$"
+    ccc_log 2 "valid_commit_type_and_scope_regex=\"$valid_commit_type_and_scope_regex\""
+
+    local valid_merge_pull_request_commit_message_regex='^Merge pull request #([0-9]+) from ([^ \r\n/]+)\/[^ \r\n]+\r?\n\r?\n(.*)$'
+    local commit_type_others='<Others>'
+
+    local i=0
+    for commit_hash in $commit_hashes_list; do
+        commit_hash_short=${commit_hash:0:8}
+        ccc_log_literal 1 "\n\nProcessing commit $i $commit_hash_short"
+
+        # Get commit_message for the commit_hash
+        commit_message="$(git -C "$GIT_DIR_PATH" log -n 1 --pretty="format:%B" "$commit_hash" 2>&1)"
+        return_value=$?
+        if [ $return_value -ne 0 ]; then
+            ccc_log_errors "Failed to get commit message for the \"$commit_hash\" commit"
+            ccc_log_errors "$commit_message"
+            return $return_value
+        fi
+
+        # Remove leading whitespaces
+        commit_message="$(printf "%s" "$commit_message" | sed -r -z -e 's/^[ \t\n]+//')"
+
+        # Remove trailing whitespaces
+        commit_message="$(printf "%s" "$commit_message" | sed -r -z -e 's/[ \t\n]+$//')"
+
+        ccc_log 2 "commit_message="
+        ccc_log 2 "\`\`\`"
+        ccc_log 2 "$commit_message"
+        ccc_log 2 "\`\`\`"
+
+        # If commit_message starts with "Merge pull request #<n> from <branch_owner>/<branch_name>",
+        # then remove the line and add pull request info line.
+        # Do not use `grep` since `grep -z` does not work with
+        # start `^` and end `$` anchors
+        # We manually add everything to pattern space and print only
+        # if it matches the regex
+        if [ -n "$(printf "%s\n" "$commit_message" | sed -r -n -e '$!{:a;N;$!ba;}; /'"$valid_merge_pull_request_commit_message_regex"'/p')" ]; then
+            commit_pull_request_number="$(printf "%s" "$commit_message" | sed -r -n -e '$!{:a;N;$!ba;}; s/'"$valid_merge_pull_request_commit_message_regex"'/\1/;p')"
+            commit_pull_request_owner="$(printf "%s" "$commit_message" | sed -r -n -e '$!{:a;N;$!ba;}; s/'"$valid_merge_pull_request_commit_message_regex"'/\2/;p')"
+            commit_message="$(printf "%s" "$commit_message" | sed -r -n -e '$!{:a;N;$!ba;}; s/'"$valid_merge_pull_request_commit_message_regex"'/\3/;p')"
+
+            # Remove leading whitespaces
+            commit_message="$(printf "%s" "$commit_message" | sed -r -z -e 's/^[ \t\n]+//')"
+
+            # If pull request was opened from branch of repo itself instead of a fork.
+            if [[ "$commit_pull_request_owner" == "$repo_owner" ]]; then
+                commit_pull_request_info="Implemented in [#$commit_pull_request_number]($REPO_URL/pull/$commit_pull_request_number)"
+            else
+                commit_pull_request_info="Implemented by @$commit_pull_request_owner in [#$commit_pull_request_number]($REPO_URL/pull/$commit_pull_request_number)"
+            fi
+            if ccc_contains_newline "$commit_message"; then
+                commit_message+=$'\n\n'"$commit_pull_request_info"
+            else
+                if [[ "$commit_message" != *"." ]]; then
+                    commit_message+="."
+                fi
+                commit_message+=" $commit_pull_request_info"
+            fi
+        fi
+
+        commit_subject="$(printf "%s" "$commit_message" | head -1)"
+
+        # If commit_subject starts with a valid commit type and scope '<type>[optional scope]: '
+        # Example: "Added: ", "Changed!: ", "Added|Changed: ", "Added/Changed: ", "Added(App): ", "Added(App: Settings): "
+        is_breaking_change=0
+        if printf "%s\n" "$commit_subject" | grep -zqE "$valid_commit_type_and_scope_regex"; then
+            commit_type_and_scope="$(printf "%s" "$commit_subject" | sed -r -z -e "s/$valid_commit_type_and_scope_regex/\1\3\4/")"
+
+            # Set commit_type to anything before first "|/" in case multiple types are defined
+            commit_type="$(printf "%s" "$commit_subject" | sed -r -z -e "s/$valid_commit_type_and_scope_regex/\1/"| sed -r -z -e 's/^([^|/]+).*/\1/')"
+
+            commit_message="$(printf "%s" "$commit_message" | sed -r -z -e "s/$valid_commit_type_and_scope_regex/\5/")"
+
+            if [[ "$commit_type_and_scope" == *"!" ]]; then
+                is_breaking_change=1
+            fi
+        else
+            commit_type="$commit_type_others"
+        fi
+
+        if [ -z "$commit_type" ]; then
+            ccc_log_arg_errors "Failed to fine commit_type for commit $i $commit_hash_short"
+            return 1
+        fi
+
+        # Covert to title case
+        commit_type_title="$(printf "%s" "$commit_type" | sed 's/[_-]/ /g' | sed 's/.*/\L&/; s/[a-z]*/\u&/g')"
+
+        if [[ "$commit_message" == *"BREAKING CHANGE: "* ]]; then
+            is_breaking_change=1
+        fi
+
+        ccc_log_literal 1 "subject: \"$commit_subject\", type: \"$commit_type_title\", is_breaking_change: \"$is_breaking_change\""
+
+        # Add commit url anchor at end of commit_message
+        commit_url_achor="([\`$commit_hash_short\`]($REPO_URL/commit/$commit_hash_short))"
+        if ccc_contains_newline "$commit_message"; then
+            commit_message+=$'\n\n'"$commit_url_achor"
+        else
+            if [[ "$commit_message" != *"." ]]; then
+                commit_message+="."
+            fi
+            commit_message+=" $commit_url_achor"
+        fi
+
+
+        # Replaces issue references with links
+        # Example: "closes #666" with "closes [#666]($REPO_URL/issue/666)
+        # https://github.com/gitbucket/gitbucket/wiki/How-to-Close-Reference-issues-and-pull-request
+        commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/^(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #([0-9]+)/\1 [#\2\]('"${REPO_URL//\//\\\/}"'\/issue\/\2)/gI')"
+
+        # Add 4 spaces to start of each line so that markdown list does not break
+        commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/^(.)/    \1/g')"
+
+        # Remove leading whitespaces
+        commit_message="$(printf "%s" "$commit_message" | sed -r -z -e 's/^[ \t\n]+//')"
+
+        if ccc_contains_newline "$commit_message"; then
+            # Add two spaces to end of each line to prevent markdown list text wrap
+            commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/(.)$/\1  /g')"
+        fi
+
+        # If commit_type ends with "!" or commit_message contains "BREAKING CHANGE: "
+        # to signify a breaking change, example: "Changed!:", then prefix
+        # commit_message with "**!** " to show a bold exclamation mark
+        if [[ "$is_breaking_change" == "1" ]]; then
+            commit_message="**!** $commit_message"
+        fi
+
+        # Convert commit_message to markdown list by prefixing with "-" and uppercasing first letter
+        commit_message="- ${commit_message^}"
+
+        # Add commit_message to the commit_type_title key in the commit_types_list associative array
+        if [[ -v commit_types_list["$commit_type_title"] ]]; then
+            commit_types_list["$commit_type_title"]="${commit_types_list["$commit_type_title"]}"$'\n\n'"$commit_message"
+        else
+            commit_types_list["$commit_type_title"]="$commit_message"
+        fi
+
+        i=$((i + 1))
+    done
+
+    release_timestamp="$(date -u +"%Y-%m-%d %H.%M")"
+
+    ccc_log_literal 1 "\n\nCreating \"$RELEASE_TAG - $release_timestamp\" changelog file at \"$CHANGELOG_FILE_PATH\""
+    ccc_log_literal 1 "types: $(printf '%s\0' "${!commit_types_list[@]}" | sort -z | tr '\0' ',' | sed -r -e 's/,$//')"
+
+    changelog_text="# Changelog"
+    changelog_text+=$'\n\n'"## [$RELEASE_TAG] - $release_timestamp"
+
+    while IFS= read -rd '' -u3 commit_type_title; do
+        if [[ "$commit_type_title" != "$commit_type_others" ]]; then
+            changelog_text+=$'\n\n'"### $commit_type_title"$'\n\n'"${commit_types_list["$commit_type_title"]}"$'\n'
+        fi
+    done 3< <(printf '%s\0' "${!commit_types_list[@]}" | sort -zn)
+
+    if [[ -v commit_types_list["$commit_type_others"] ]]; then
+        changelog_text+=$'\n\n'"### $commit_type_others"$'\n\n'"${commit_types_list["$commit_type_others"]}"$'\n'
+    fi
+
+    changelog_text+=$'\n'"##"
+    changelog_text+=$'\n\n'"[$RELEASE_TAG]: $REPO_URL/compare/<LAST_RELEASE_TAG>..$RELEASE_TAG"$'\n'
+
+    # Create CHANGELOG_FILE_PATH parent directory if it does not exist
+    ccc_create_parent_path CHANGELOG_FILE_PATH "$CHANGELOG_FILE_PATH" || return $?
+   
+    # Create changelog_text file at CHANGELOG_FILE_PATH
+    printf "%s" "$changelog_text" > "$CHANGELOG_FILE_PATH" || return $?
+
+    ccc_log_literal 1 "Changelog created successfully"
+
+    return 0
+
+}
+
+##
+# ccc_create_parent_path `label` `path`
+##
+ccc_create_parent_path() {
+
+    local return_value
+
+    # If parameter count is not 2
+    if [ $# -ne 2 ]; then
+        ccc_log_errors "Invalid parameter count to \"ccc_create_parent_path\""
+        return 1
+    fi
+
+    local label="$1"
+    local path="$2"
+
+    local path_parent
+
+    # Find path_parent
+    path_parent=$(dirname "$path")
+    return_value=$?
+    if [ $return_value -ne 0 ]; then
+        ccc_log_errors "Failure while finding dirname for $label \"$path\""
+        return $return_value
+    fi
+
+    # If path_parent exists and is not a directory
+    if [ -e "$path_parent" ] && [ ! -d "$path_parent" ]; then
+        ccc_log_errors "A non-directory file exists at parent path \"$path_parent\" of $label \"$path\""
+        return 1
+    fi
+
+    # Create path_parent if it does not exist
+    if [ ! -d "$path_parent" ]; then
+        mkdir -p "$path_parent"
+        return_value=$?
+        if [ $return_value -ne 0 ]; then
+            ccc_log_errors "Failed to create parent directory of $label \"$path\""
+            return $return_value
+        fi
+    fi
+
+    return 0
+
+}
+
+
+##
+# ccc_contains_newline `variable_value`
+##
+ccc_contains_newline() {
+
+    [[ "$1" == *$'\n'* ]]
+
+}
+
+##
+# ccc_trim_trailing_newlines `variable_name` `variable_value`
+##
+ccc_trim_trailing_newlines() {
+
+    local extglob_was_unset=1
+    shopt extglob >/dev/null && extglob_was_unset=0 # Check if 'extglob' is currently set
+    (( extglob_was_unset )) && shopt -s extglob # Set 'extglob', if currently unset
+
+    local valid_bash_variable_name_regex='^[a-zA-Z][a-zA-Z0-9_]*(\[[0-9]+\])?$'
+
+    # If $1 is valid bash variable_name
+    if [[ "$1" =~ $valid_bash_variable_name_regex ]]; then
+        # Set variable_name stored in $1 to variable_value in $2 without trailing newline and carriage return characters
+        printf -v "$1" "%s" "${2%%*([$'\r\n'])}"
+    else
+        ccc_log_errors "variable_name \"$1\" passed to \"ccc_trim_trailing_newlines\" is not a valid bash variable name"
+    fi
+
+    (( extglob_was_unset )) && shopt -u extglob # Unset 'extglob', if previously unset
+
+}
+
+##
+# ccc_process_arguments `[argument...]`
+##
+ccc_process_arguments() {
+
+    local OPTIND
+
+    # Parse options to create-conventional-changelog command
+    while getopts ":hv-:" opt; do
+        case ${opt} in
+            -)
+                long_optargs="${OPTARG#*=}"
+                case "${OPTARG}" in
+                    help)
+                        ccc_log_args "Parsing option: '--${OPTARG%=*}'"
+                        ccc_show_help
+                        CCC_NOOP_COMMAND=1; return 0
+                        ;;
+                    help*)
+                        ccc_log_arg_errors "Invalid option or parameters not allowed for option: '--${OPTARG%=*}'"
+                        ccc_exit_on_error || return $?
+                        ;;
+                    version)
+                        ccc_log_args "Parsing option: '--${OPTARG%=*}'"
+                        echo "$version"
+                        CCC_NOOP_COMMAND=1; return 0
+                        ;;
+                    version*)
+                        ccc_log_arg_errors "Invalid option or parameters not allowed for option: '--${OPTARG%=*}'"
+                        ccc_exit_on_error || return $?
+                        ;;
+                    '' ) # "--" terminates argument processing to support non-options that start with dashes
+                        ccc_log_args "Parsing option: '--'"
+                        break
+                        ;;
+                    *)
+                        ccc_log_arg_errors "Unknown option '--${OPTARG%=*}'"
+                        ccc_exit_on_error || return $?
+                        ;;
+                esac
+                ;;
+            h)
+                ccc_log_args "Parsing option: '-${opt}'"
+                ccc_show_help
+                CCC_NOOP_COMMAND=1; return 0
+                ;;
+            v)
+                ccc_log_args "Parsing option: '-${opt}'"
+                if [ "$CCC_VERBOSE_LEVEL" -lt "2" ]; then
+                    CCC_VERBOSE_LEVEL=$((CCC_VERBOSE_LEVEL+1));
+                else
+                    ccc_log_arg_errors "Invalid Option, max verbose level is 2"
+                    ccc_exit_on_error || return $?
+                fi
+                ;;
+            \?)
+                ccc_log_arg_errors "Unknown option: '-${OPTARG}'"
+                ccc_exit_on_error || return $?
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1)) # Remove already processed arguments from arguments array
+
+    # If no parameters are received
+    if [ $# -eq 0 ]; then
+        ccc_show_help
+        CCC_NOOP_COMMAND=1; return 0
+    fi
+
+    # If 6 parameters are not received
+    if [ $# -ne 6 ]; then
+        ccc_log_arg_errors "Invalid argument count. The \"create-conventional-changelog\" command expects 6 arguments: git_dir_path changelog_file_path start_commit_hash end_commit_hash repo_url release_tag"
+        return 1
+    fi
+
+    ccc_trim_trailing_newlines "GIT_DIR_PATH" "$1"
+    ccc_trim_trailing_newlines "CHANGELOG_FILE_PATH" "$2"
+    ccc_trim_trailing_newlines "START_COMMIT_HASH" "$3"
+    ccc_trim_trailing_newlines "END_COMMIT_HASH" "$4"
+    ccc_trim_trailing_newlines "REPO_URL" "$5"
+    ccc_trim_trailing_newlines "RELEASE_TAG" "$6"
+
+}
+
+##
+# ccc_show_help
+##
+ccc_show_help() {
+
+echo "
+create-conventional-changelog is a script for automatically generating a
+changelog from git history which uses conventional commit messages.
+https://www.conventionalcommits.org/en/v1.0.0
+
+
+Usage:
+    create-conventional-changelog [command_options] git_dir_path changelog_file_path start_commit_hash end_commit_hash repo_url release_tag
+
+Available command_options:
+  [ -h | --help ]    display this help screen
+  [ --version ]      display version
+  [ -v | -vv ]       set verbose level to 1 or 2
+
+
+start_commit_hash should be latest commit hash of previous release.
+
+end_commit_hash should be latest commit hash of current release.
+
+repo_url must be in the format: https://host/<user>/<repo>
+Example: https://github.com/termux/termux-app
+
+release_tag must be a valid git tag.
+Check http://git-scm.com/docs/git-check-ref-format for details.
+"
+
+}
+
+##
+# ccc_exit_on_error
+##
+ccc_exit_on_error() {
+
+    ccc_show_help
+    return 1
+
+}
+
+# Run ccc_main function
+[[ x"${BASH_SOURCE[0]}" == x"$0" ]] && { ccc_main "$@"; exit $?; }
