@@ -229,9 +229,9 @@ ccc_run() {
 
             # If pull request was opened from branch of repo itself instead of a fork.
             if [[ "$commit_pull_request_owner" == "$repo_owner" ]]; then
-                commit_pull_request_info="Implemented in [#$commit_pull_request_number]($REPO_URL/pull/$commit_pull_request_number)"
+                commit_pull_request_info="Implemented in [#$commit_pull_request_number]($REPO_URL/pull/$commit_pull_request_number)."
             else
-                commit_pull_request_info="Implemented by @$commit_pull_request_owner in [#$commit_pull_request_number]($REPO_URL/pull/$commit_pull_request_number)"
+                commit_pull_request_info="Implemented by @$commit_pull_request_owner in [#$commit_pull_request_number]($REPO_URL/pull/$commit_pull_request_number)."
             fi
             if ccc_contains_newline "$commit_message"; then
                 commit_message+=$'\n\n'"$commit_pull_request_info"
