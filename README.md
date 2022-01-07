@@ -93,6 +93,6 @@ release_tag must be a valid git tag.
 Check http://git-scm.com/docs/git-check-ref-format for details.
 
 Examples:
-create-conventional-changelog termux-app changelog.md 9272a757 6c24e6ac https://github.com/termux/termux-app 0.118.0
+create-conventional-changelog termux-app changelog.md 9272a757 6c24e6ac https://github.com/termux/termux-app v0.118.0
 ```
 ##
