@@ -292,7 +292,7 @@ ccc_run() {
         # Replaces issue references with links
         # Example: "closes #666" with "closes [#666]($REPO_URL/issue/666)
         # https://github.com/gitbucket/gitbucket/wiki/How-to-Close-Reference-issues-and-pull-request
-        commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/^(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #([0-9]+)/\1 [#\2\]('"${REPO_URL//\//\\\/}"'\/issue\/\2)/gI')"
+        commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #([0-9]+)/\1 [#\2\]('"${REPO_URL//\//\\\/}"'\/issue\/\2)/gI')"
 
         # Add 4 spaces to start of each line so that markdown list does not break
         commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/^(.)/    \1/g')"
