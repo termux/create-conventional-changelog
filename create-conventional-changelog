@@ -77,6 +77,7 @@ ccc_run() {
     local changelog_text
     local release_timestamp
     local repo_owner
+    local repo_url_escaped
 
     ccc_log 1 "GIT_DIR_PATH=\"$GIT_DIR_PATH\""
     ccc_log 1 "CHANGELOG_FILE_PATH=\"$CHANGELOG_FILE_PATH\""
@@ -133,6 +134,7 @@ ccc_run() {
         return 1
     fi
 
+    repo_url_escaped="$(ccc_get_escaped_string_for_sed "$REPO_URL")"
     repo_owner="$(printf "%s" "$REPO_URL" | sed -r -z -e "s/$valid_repo_url_regex/\2/")"
 
     # If RELEASE_TAG is not set
@@ -293,6 +295,10 @@ ccc_run() {
         # Example: "closes #666" with "closes [#666]($REPO_URL/issues/666)
         # https://github.com/gitbucket/gitbucket/wiki/How-to-Close-Reference-issues-and-pull-request
         commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved|issue) #([0-9]+)/\1 [#\2\]('"${REPO_URL//\//\\\/}"'\/issues\/\2)/gI')"
+        
+        # Replaces issue link with link anchor
+        # Example: "issue #666" with "issue [#666]($REPO_URL/issues/666)
+        commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/(issue:?) '"$repo_url_escaped"'\/issues\/([0-9]+)/\1 [#\2\]('"${REPO_URL//\//\\\/}"'\/issues\/\2)/gI')"
 
         # Add 4 spaces to start of each line so that markdown list does not break
         commit_message="$(printf "%s" "$commit_message" | sed -r -e 's/^(.)/    \1/g')"
@@ -401,6 +407,19 @@ ccc_create_parent_path() {
     fi
 
     return 0
+
+}
+
+##
+# Escape `[]/$*.^` with backslashes for sed
+# .
+# .
+# ccc_contains_newline `variable_value`
+##
+ccc_get_escaped_string_for_sed() {
+
+    # Test with: printf "%s" "[]/$.*^" | sed -zE -e 's/[][/$*.^]/\\&/g'
+    printf "%s" "$1" | sed -zE -e 's/[][/$*.^]/\\&/g'
 
 }
 
