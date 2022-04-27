@@ -460,13 +460,13 @@ ccc_trim_trailing_newlines() {
 ##
 ccc_process_arguments() {
 
-    local OPTIND
+    local opt; local arg; local OPTARG; local OPTIND
 
     # Parse options to create-conventional-changelog command
     while getopts ":hv-:" opt; do
         case ${opt} in
             -)
-                long_optargs="${OPTARG#*=}"
+                arg="${OPTARG#*=}"
                 case "${OPTARG}" in
                     help)
                         ccc_log_args "Parsing option: '--${OPTARG%=*}'"
