@@ -350,7 +350,7 @@ ccc_run() {
     fi
 
     changelog_text+=$'\n'"##"
-    changelog_text+=$'\n\n'"[$RELEASE_TAG]: $REPO_URL/compare/<LAST_RELEASE_TAG>..$RELEASE_TAG"$'\n'
+    changelog_text+=$'\n\n'"[$RELEASE_TAG]: $REPO_URL/compare/<LAST_RELEASE_TAG>...$RELEASE_TAG"$'\n'
 
     # Create CHANGELOG_FILE_PATH parent directory if it does not exist
     ccc_create_parent_path CHANGELOG_FILE_PATH "$CHANGELOG_FILE_PATH" || return $?
