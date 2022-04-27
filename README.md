@@ -15,7 +15,7 @@ A script for automatically generating a changelog from git history which uses co
 
 ### Downloads
 
-Latest version is `v0.1.0`.
+Latest version is `v0.2.0`.
 
 - [GitHub releases](https://github.com/termux/create-conventional-changelog/releases).
 ##
